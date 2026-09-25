@@ -1,0 +1,17 @@
+# Otomatik HTTPS (Let's Encrypt). DOMAIN ve ACME_EMAIL .env dosyasından gelir.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+	request_body {
+		max_size 2MB
+	}
+	reverse_proxy app:3000
+}

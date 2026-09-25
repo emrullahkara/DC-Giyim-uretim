@@ -27,7 +27,7 @@ import { prisma } from './db.js';
 
 export async function buildApp() {
   const app = Fastify({
-    logger: config.NODE_ENV === 'test' ? false : { level: isProd ? 'info' : 'debug', redact: ['req.headers.cookie', 'req.headers.authorization'] },
+    logger: config.NODE_ENV === 'test' ? false : { level: config.LOG_LEVEL ?? (isProd ? 'info' : 'debug'), redact: ['req.headers.cookie', 'req.headers.authorization'] },
     trustProxy: config.TRUST_PROXY === 'true',
     bodyLimit: 1024 * 1024, // 1 MB
   });

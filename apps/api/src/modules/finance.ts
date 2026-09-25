@@ -71,7 +71,7 @@ export async function financeRoutes(app: FastifyInstance) {
       take: 1000,
     });
     const today = startOfDay();
-    return list.map((c) => ({ ...c, daysLeft: Math.ceil((c.dueDate.getTime() - today.getTime()) / 86400_000) }));
+    return list.map((c) => ({ ...c, daysLeft: Math.round((startOfDay(c.dueDate).getTime() - today.getTime()) / 86400_000) }));
   });
 
   const chequeBody = z.object({

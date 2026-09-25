@@ -14,6 +14,7 @@ const schema = z.object({
   SESSION_IDLE_HOURS: z.coerce.number().default(12),
   SESSION_MAX_DAYS: z.coerce.number().default(7),
   WEB_DIST: z.string().optional(),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'silent']).optional(),
   // Hız sınırı çarpanı (yalnızca test/geliştirmede büyütülür)
   RATE_LIMIT_FACTOR: z.coerce.number().min(1).max(1000).default(1),
 });

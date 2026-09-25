@@ -1,0 +1,15 @@
+{
+  "name": "DC Giyim-Üretim",
+  "short_name": "DC Üretim",
+  "description": "Tekstil atölyeleri için üretim, fason, depo ve personel takibi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f7fb",
+  "theme_color": "#1e2a5a",
+  "lang": "tr",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

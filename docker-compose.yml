@@ -1,0 +1,63 @@
+# DC Giyim-Üretim — tek komutla kurulum:  docker compose up -d
+# Önce .env.example dosyasını .env olarak kopyalayıp değerleri doldurun.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dcgiyim
+      POSTGRES_USER: dcgiyim
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env içinde tanımlanmalı}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dcgiyim -d dcgiyim']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+    # Veritabanı dışarıya AÇILMAZ (port yayınlanmıyor)
+
+  app:
+    build: .
+    image: dc-giyim-uretim:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://dcgiyim:${POSTGRES_PASSWORD}@db:5432/dcgiyim?schema=public
+      PUBLIC_ORIGIN: https://${DOMAIN:?DOMAIN .env içinde tanımlanmalı}
+      TRUST_PROXY: 'true'
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+      SESSION_IDLE_HOURS: ${SESSION_IDLE_HOURS:-12}
+      SESSION_MAX_DAYS: ${SESSION_MAX_DAYS:-7}
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [internal]
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:

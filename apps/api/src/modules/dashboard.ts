@@ -20,6 +20,7 @@ interface Alert {
   action?: string;
 }
 
+const unit = (u: string) => u.toLocaleLowerCase('tr');
 const fmtDate = (d: Date) => d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
 
 export async function dashboardRoutes(app: FastifyInstance) {
@@ -124,12 +125,12 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const critical = mats.filter((m) => num(m.stock) <= num(m.minStock));
       kpi.criticalStock = critical.length;
       for (const m of critical.slice(0, 10))
-        alerts.push({ level: 'uyari', module: 'depo', title: `Kritik stok: ${m.code} ${m.name}${m.color ? ` (${m.color})` : ''}`, detail: `Mevcut ${num(m.stock)} ${m.unit}, minimum ${num(m.minStock)} ${m.unit}.`, link: `/depo/${m.id}`, action: 'Sipariş ver' });
+        alerts.push({ level: 'uyari', module: 'depo', title: `Kritik stok: ${m.code} ${m.name}${m.color ? ` (${m.color})` : ''}`, detail: `Mevcut ${num(m.stock)} ${unit(m.unit)}, minimum ${num(m.minStock)} ${unit(m.unit)}.`, link: `/depo/${m.id}`, action: 'Sipariş ver' });
       const reqs = (await materialRequirements(db)).filter((r) => r.shortage > 0);
       kpi.materialShortage = reqs.length;
       out.shortages = reqs.slice(0, 15);
       for (const r of reqs.slice(0, 10))
-        alerts.push({ level: 'kritik', module: 'depo', title: `Kumaş/malzeme yetmiyor: ${r.material.code} ${r.material.name}`, detail: `Açık siparişler için ${r.required} ${r.material.unit} gerekli, depoda ${r.stock}. Eksik: ${r.shortage} ${r.material.unit} (${r.orders.slice(0, 3).join(', ')}).`, link: `/depo/${r.material.id}`, action: 'Tedarik planla' });
+        alerts.push({ level: 'kritik', module: 'depo', title: `Kumaş/malzeme yetmiyor: ${r.material.code} ${r.material.name}`, detail: `Açık siparişler için ${r.required} ${unit(r.material.unit)} gerekli, depoda ${r.stock}. Eksik: ${r.shortage} ${unit(r.material.unit)} (${r.orders.slice(0, 3).join(', ')}).`, link: `/depo/${r.material.id}`, action: 'Tedarik planla' });
     }
 
     // ── Finans: çek/senet vadeleri, alacak
@@ -137,7 +138,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const limit = addDays(today, A.chequeDays + 1);
       const cheques = await db.cheque.findMany({ where: { status: 'PORTFOYDE', dueDate: { lt: limit } }, include: { party: { select: { name: true } } }, orderBy: { dueDate: 'asc' } });
       for (const c of cheques) {
-        const days = Math.ceil((c.dueDate.getTime() - today.getTime()) / 86400_000);
+        const days = Math.round((startOfDay(c.dueDate).getTime() - today.getTime()) / 86400_000);
         const amount = num(c.amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 });
         const what = c.direction === 'VERILEN' ? 'Ödenecek' : 'Tahsil edilecek';
         alerts.push({
