@@ -41,6 +41,8 @@ Pantolonsu, gömlekçisi, montçusu, kabancısı, abiyecisi, triko atölyesi… 
 
 Ayrıntılı tasarım gerekçeleri: [docs/MODULLER.md](docs/MODULLER.md)
 
+**Ürün sunumu (21 slayt):** [docs/DC-Giyim-Uretim-Sunum.pptx](docs/DC-Giyim-Uretim-Sunum.pptx) · [PDF](docs/DC-Giyim-Uretim-Sunum.pdf)
+
 ## Güvenlik özeti
 
 - **Çok firmalı izolasyon**: Her sorguya firma kimliği sunucu tarafında zorla eklenir; bir firma başka firmanın kaydına id bilse bile erişemez (testlerle kanıtlı).
