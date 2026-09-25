@@ -1,0 +1,761 @@
+// DC Giyim-Üretim veri modeli
+// Kural: Firma (tenant) verisi taşıyan HER tablo `tenantId` içerir.
+// Uygulama katmanı tüm sorgulara tenantId'yi otomatik ekler (src/db.ts).
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Firma, kullanıcı, güvenlik ─────────────────────────
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  users    User[]
+  sessions Session[]
+  counters Counter[]
+}
+
+enum Role {
+  SAHIP
+  YONETICI
+  MUHASEBE
+  URETIM_SEFI
+  DEPOCU
+  KALITECI
+  OPERATOR
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email              String    @unique
+  name               String
+  passwordHash       String
+  role               Role
+  active             Boolean   @default(true)
+  failedLogins       Int       @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  passwordChangedAt  DateTime  @default(now())
+  mustChangePassword Boolean   @default(false)
+  createdAt          DateTime  @default(now())
+
+  sessions Session[]
+
+  @@index([tenantId])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  ip         String?
+  userAgent  String?
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+  userName  String?
+  action    String
+  entity    String
+  entityId  String?
+  meta      Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+// Belge numarası sayaçları (SIP-2026-0001 gibi)
+model Counter {
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key      String
+  value    Int    @default(0)
+
+  @@id([tenantId, key])
+}
+
+// ───────────────────────── Cari (müşteri, tedarikçi, fasoncu) ─────────────────────────
+
+enum PartyRole {
+  MUSTERI
+  TEDARIKCI
+  FASONCU
+}
+
+model Party {
+  id          String      @id @default(cuid())
+  tenantId    String
+  roles       PartyRole[]
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  taxOffice   String?
+  taxNo       String?
+  city        String?
+  address     String?
+  // Fasoncunun yaptığı işler: DIKIM, NAKIS, BASKI, YIKAMA, UTU ...
+  specialties String[]
+  // Günlük kapasite (adet) — fason planlaması için
+  dailyCapacity Int?
+  note        String?
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+
+  orders       Order[]
+  fasonJobs    FasonJob[]
+  materials    Material[]    @relation("MaterialSupplier")
+  ownedStock   Material[]    @relation("MaterialOwner")
+  transactions Transaction[]
+  cheques      Cheque[]
+  shipments    Shipment[]
+  models       StyleModel[]
+
+  @@index([tenantId, name])
+}
+
+// ───────────────────────── Model / teknik föy ─────────────────────────
+
+enum ModelStatus {
+  NUMUNE
+  ONAYLI
+  URETIMDE
+  ARSIV
+}
+
+model StyleModel {
+  id          String      @id @default(cuid())
+  tenantId    String
+  code        String
+  name        String
+  category    String?
+  season      String?
+  customerId  String?
+  customer    Party?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  sizes       String[]
+  colors      String[]
+  status      ModelStatus @default(NUMUNE)
+  description String?
+  // Üretim rotası: sırasıyla aşama kodları
+  route       String[]
+  // Maliyet parametreleri
+  salePrice   Decimal?    @db.Decimal(14, 2)
+  overheadPct Decimal     @default(15) @db.Decimal(5, 2)
+  createdAt   DateTime    @default(now())
+
+  materials  ModelMaterial[]
+  operations ModelOperation[]
+  orderLines OrderLine[]
+  workOrders WorkOrder[]
+  stock      FinishedStock[]
+
+  @@unique([tenantId, code])
+}
+
+model ModelMaterial {
+  id          String     @id @default(cuid())
+  tenantId    String
+  modelId     String
+  model       StyleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  materialId  String
+  material    Material   @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  // Adet başına sarfiyat (metre / kg / adet)
+  consumption Decimal    @db.Decimal(12, 4)
+  note        String?
+
+  @@index([tenantId, modelId])
+}
+
+model ModelOperation {
+  id        String     @id @default(cuid())
+  tenantId  String
+  modelId   String
+  model     StyleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  sequence  Int
+  name      String
+  stage     String
+  // Standart dakika (SAM)
+  minutes   Decimal    @default(0) @db.Decimal(8, 2)
+  // Parça başı ücret (TL/adet)
+  pieceRate Decimal    @default(0) @db.Decimal(10, 4)
+
+  pieceWorks PieceWork[]
+
+  @@index([tenantId, modelId])
+}
+
+// ───────────────────────── Sipariş ─────────────────────────
+
+enum OrderType {
+  SATIS
+  FASON_ALINAN
+}
+
+enum OrderStatus {
+  TASLAK
+  ONAYLANDI
+  URETIMDE
+  KISMI_SEVK
+  TAMAMLANDI
+  IPTAL
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  tenantId   String
+  no         String
+  type       OrderType   @default(SATIS)
+  customerId String
+  customer   Party       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  orderDate  DateTime    @default(now())
+  dueDate    DateTime
+  status     OrderStatus @default(TASLAK)
+  priority   Int         @default(2)
+  currency   String      @default("TRY")
+  customerRef String?
+  note       String?
+  createdAt  DateTime    @default(now())
+
+  lines      OrderLine[]
+  workOrders WorkOrder[]
+  shipments  Shipment[]
+
+  @@unique([tenantId, no])
+  @@index([tenantId, status, dueDate])
+}
+
+model OrderLine {
+  id        String     @id @default(cuid())
+  tenantId  String
+  orderId   String
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  modelId   String
+  model     StyleModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  color     String
+  // Beden asortisi: {"S":10,"M":20,"L":20}
+  sizes     Json
+  quantity  Int
+  unitPrice Decimal?   @db.Decimal(14, 2)
+  shippedQty Int       @default(0)
+
+  workOrders WorkOrder[]
+  shipmentLines ShipmentLine[]
+
+  @@index([tenantId, orderId])
+}
+
+// ───────────────────────── Üretim (iş emri, aşamalar) ─────────────────────────
+
+enum WorkOrderStatus {
+  PLANLANDI
+  DEVAM
+  TAMAMLANDI
+  IPTAL
+}
+
+enum StageStatus {
+  BEKLIYOR
+  DEVAM
+  TAMAM
+}
+
+model WorkOrder {
+  id          String          @id @default(cuid())
+  tenantId    String
+  no          String
+  orderId     String?
+  order       Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  orderLineId String?
+  orderLine   OrderLine?      @relation(fields: [orderLineId], references: [id], onDelete: SetNull)
+  modelId     String
+  model       StyleModel      @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  color       String
+  sizes       Json
+  plannedQty  Int
+  status      WorkOrderStatus @default(PLANLANDI)
+  startDate   DateTime        @default(now())
+  dueDate     DateTime
+  note        String?
+  createdAt   DateTime        @default(now())
+
+  stages   WorkOrderStage[]
+  cuttings Cutting[]
+  fasonJobs FasonJob[]
+  qualityChecks QualityCheck[]
+  pieceWorks PieceWork[]
+
+  @@unique([tenantId, no])
+  @@index([tenantId, status])
+}
+
+model WorkOrderStage {
+  id          String      @id @default(cuid())
+  tenantId    String
+  workOrderId String
+  workOrder   WorkOrder   @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  sequence    Int
+  stage       String
+  status      StageStatus @default(BEKLIYOR)
+  // İçeride mi yapılıyor, fasonda mı?
+  outsourced  Boolean     @default(false)
+  doneQty     Int         @default(0)
+  defectQty   Int         @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  logs StageLog[]
+
+  @@index([tenantId, workOrderId])
+}
+
+model StageLog {
+  id         String         @id @default(cuid())
+  tenantId   String
+  stageId    String
+  stage      WorkOrderStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  qty        Int
+  defectQty  Int            @default(0)
+  // Son aşamada beden kırılımı (mamul stoğa girer)
+  sizes      Json?
+  source     String?
+  note       String?
+  userId     String?
+  userName   String?
+  createdAt  DateTime       @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+// Kesimhane kaydı: pastal, kat, kumaş sarfiyatı
+model Cutting {
+  id           String     @id @default(cuid())
+  tenantId     String
+  workOrderId  String
+  workOrder    WorkOrder  @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  lotId        String?
+  lot          MaterialLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  materialId   String?
+  layers       Int
+  markerLength Decimal    @db.Decimal(10, 2)
+  fabricUsed   Decimal    @db.Decimal(12, 3)
+  sizes        Json
+  cutQty       Int
+  note         String?
+  date         DateTime   @default(now())
+
+  @@index([tenantId, workOrderId])
+}
+
+// Parça başı üretim kaydı (personel hak edişi)
+model PieceWork {
+  id          String          @id @default(cuid())
+  tenantId    String
+  employeeId  String
+  employee    Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workOrderId String?
+  workOrder   WorkOrder?      @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  operationId String?
+  operation   ModelOperation? @relation(fields: [operationId], references: [id], onDelete: SetNull)
+  description String?
+  qty         Int
+  rate        Decimal         @db.Decimal(10, 4)
+  date        DateTime        @default(now())
+
+  @@index([tenantId, employeeId, date])
+}
+
+// ───────────────────────── Fason ─────────────────────────
+
+enum FasonStatus {
+  GONDERILDI
+  KISMI_DONDU
+  TAMAMLANDI
+  IPTAL
+}
+
+model FasonJob {
+  id           String      @id @default(cuid())
+  tenantId     String
+  no           String
+  workOrderId  String?
+  workOrder    WorkOrder?  @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  partyId      String
+  party        Party       @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  stage        String
+  description  String?
+  sentQty      Int
+  receivedQty  Int         @default(0)
+  defectQty    Int         @default(0)
+  unitPrice    Decimal?    @db.Decimal(12, 4)
+  sentDate     DateTime    @default(now())
+  dueDate      DateTime
+  dispatchNo   String?
+  status       FasonStatus @default(GONDERILDI)
+  completedAt  DateTime?
+  note         String?
+  createdAt    DateTime    @default(now())
+
+  receipts FasonReceipt[]
+
+  @@unique([tenantId, no])
+  @@index([tenantId, status, dueDate])
+}
+
+model FasonReceipt {
+  id         String   @id @default(cuid())
+  tenantId   String
+  fasonJobId String
+  fasonJob   FasonJob @relation(fields: [fasonJobId], references: [id], onDelete: Cascade)
+  qty        Int
+  defectQty  Int      @default(0)
+  dispatchNo String?
+  note       String?
+  date       DateTime @default(now())
+
+  @@index([tenantId, fasonJobId])
+}
+
+// ───────────────────────── Depo: kumaş, aksesuar ─────────────────────────
+
+enum MaterialType {
+  KUMAS
+  ASTAR
+  AKSESUAR
+  IPLIK
+  ETIKET
+  AMBALAJ
+  DIGER
+}
+
+model Material {
+  id           String       @id @default(cuid())
+  tenantId     String
+  type         MaterialType
+  code         String
+  name         String
+  color        String?
+  unit         String       @default("METRE")
+  widthCm      Int?
+  gsm          Int?
+  composition  String?
+  supplierId   String?
+  supplier     Party?       @relation("MaterialSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
+  // Müşteri (marka) malı ise sahibi: emanet stok
+  ownerPartyId String?
+  ownerParty   Party?       @relation("MaterialOwner", fields: [ownerPartyId], references: [id], onDelete: SetNull)
+  unitPrice    Decimal?     @db.Decimal(12, 4)
+  minStock     Decimal      @default(0) @db.Decimal(12, 3)
+  stock        Decimal      @default(0) @db.Decimal(12, 3)
+  location     String?
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+
+  lots      MaterialLot[]
+  movements StockMovement[]
+  models    ModelMaterial[]
+
+  @@unique([tenantId, code])
+}
+
+// Kumaş topu / boya partisi
+model MaterialLot {
+  id         String   @id @default(cuid())
+  tenantId   String
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  lotNo      String
+  rollNo     String?
+  quantity   Decimal  @db.Decimal(12, 3)
+  remaining  Decimal  @db.Decimal(12, 3)
+  location   String?
+  receivedAt DateTime @default(now())
+
+  cuttings  Cutting[]
+  movements StockMovement[]
+
+  @@index([tenantId, materialId])
+}
+
+enum MovementType {
+  GIRIS
+  CIKIS
+  IADE
+  SAYIM
+  FIRE
+  FASONA_CIKIS
+}
+
+model StockMovement {
+  id          String       @id @default(cuid())
+  tenantId    String
+  materialId  String
+  material    Material     @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  lotId       String?
+  lot         MaterialLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  type        MovementType
+  // İşaretli miktar: giriş +, çıkış -
+  quantity    Decimal      @db.Decimal(12, 3)
+  unitPrice   Decimal?     @db.Decimal(12, 4)
+  partyId     String?
+  workOrderId String?
+  docNo       String?
+  note        String?
+  userName    String?
+  date        DateTime     @default(now())
+
+  @@index([tenantId, materialId, date])
+}
+
+// ───────────────────────── Mamul depo ve sevkiyat ─────────────────────────
+
+model FinishedStock {
+  id       String     @id @default(cuid())
+  tenantId String
+  modelId  String
+  model    StyleModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  color    String
+  size     String
+  quantity Int        @default(0)
+  // İkinci kalite (defolu) stok
+  secondQty Int       @default(0)
+
+  @@unique([tenantId, modelId, color, size])
+}
+
+model Shipment {
+  id         String   @id @default(cuid())
+  tenantId   String
+  no         String
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customerId String
+  customer   Party    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  date       DateTime @default(now())
+  dispatchNo String?
+  cartons    Int?
+  note       String?
+  createdAt  DateTime @default(now())
+
+  lines ShipmentLine[]
+
+  @@unique([tenantId, no])
+}
+
+model ShipmentLine {
+  id          String     @id @default(cuid())
+  tenantId    String
+  shipmentId  String
+  shipment    Shipment   @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  orderLineId String?
+  orderLine   OrderLine? @relation(fields: [orderLineId], references: [id], onDelete: SetNull)
+  modelId     String
+  color       String
+  sizes       Json
+  quantity    Int
+  unitPrice   Decimal?   @db.Decimal(14, 2)
+}
+
+// ───────────────────────── Kalite ─────────────────────────
+
+model QualityCheck {
+  id          String     @id @default(cuid())
+  tenantId    String
+  workOrderId String?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  stage       String
+  checkedQty  Int
+  passedQty   Int
+  // {"Atlama dikiş": 3, "Leke": 1}
+  defects     Json       @default("{}")
+  inspector   String?
+  note        String?
+  date        DateTime   @default(now())
+
+  @@index([tenantId, date])
+}
+
+// ───────────────────────── Personel ─────────────────────────
+
+enum WageType {
+  AYLIK
+  GUNLUK
+  PARCA_BASI
+}
+
+model Employee {
+  id         String    @id @default(cuid())
+  tenantId   String
+  firstName  String
+  lastName   String
+  // Hassas (KVKK): yalnızca personel:hassas yetkisiyle görünür
+  nationalId String?
+  iban       String?
+  phone      String?
+  department String
+  position   String?
+  wageType   WageType  @default(AYLIK)
+  wage       Decimal   @default(0) @db.Decimal(12, 2)
+  startDate  DateTime  @default(now())
+  endDate    DateTime?
+  active     Boolean   @default(true)
+  note       String?
+  createdAt  DateTime  @default(now())
+
+  attendances Attendance[]
+  advances    Advance[]
+  pieceWorks  PieceWork[]
+
+  @@index([tenantId, active])
+}
+
+enum AttendanceStatus {
+  GELDI
+  GELMEDI
+  IZINLI
+  RAPORLU
+  YARIM_GUN
+}
+
+model Attendance {
+  id         String           @id @default(cuid())
+  tenantId   String
+  employeeId String
+  employee   Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date       DateTime         @db.Date
+  status     AttendanceStatus
+  overtime   Decimal          @default(0) @db.Decimal(5, 2)
+  note       String?
+
+  @@unique([tenantId, employeeId, date])
+}
+
+model Advance {
+  id         String   @id @default(cuid())
+  tenantId   String
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  amount     Decimal  @db.Decimal(12, 2)
+  date       DateTime @default(now())
+  note       String?
+
+  @@index([tenantId, employeeId])
+}
+
+// ───────────────────────── Finans: cari hareket, çek/senet ─────────────────────────
+
+enum TxType {
+  SATIS_FATURASI
+  ALIS_FATURASI
+  FASON_FATURASI
+  TAHSILAT
+  ODEME
+}
+
+enum PayMethod {
+  NAKIT
+  HAVALE
+  CEK
+  SENET
+  KREDI_KARTI
+  DIGER
+}
+
+model Transaction {
+  id       String     @id @default(cuid())
+  tenantId String
+  partyId  String
+  party    Party      @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  type     TxType
+  amount   Decimal    @db.Decimal(14, 2)
+  currency String     @default("TRY")
+  method   PayMethod?
+  date     DateTime   @default(now())
+  dueDate  DateTime?
+  docNo    String?
+  note     String?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, partyId, date])
+}
+
+enum ChequeDirection {
+  ALINAN
+  VERILEN
+}
+
+enum ChequeStatus {
+  PORTFOYDE
+  CIRO_EDILDI
+  TAHSIL_EDILDI
+  ODENDI
+  KARSILIKSIZ
+  IADE
+}
+
+model Cheque {
+  id        String          @id @default(cuid())
+  tenantId  String
+  kind      String          @default("CEK")
+  direction ChequeDirection
+  partyId   String
+  party     Party           @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  amount    Decimal         @db.Decimal(14, 2)
+  currency  String          @default("TRY")
+  dueDate   DateTime
+  bank      String?
+  serialNo  String?
+  status    ChequeStatus    @default(PORTFOYDE)
+  note      String?
+  createdAt DateTime        @default(now())
+
+  @@index([tenantId, status, dueDate])
+}
+
+// ───────────────────────── Görevler ─────────────────────────
+
+enum TaskStatus {
+  ACIK
+  TAMAM
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  tenantId    String
+  title       String
+  detail      String?
+  assigneeId  String?
+  assigneeName String?
+  dueDate     DateTime?
+  status      TaskStatus @default(ACIK)
+  priority    Int        @default(2)
+  link        String?
+  createdBy   String?
+  createdAt   DateTime   @default(now())
+  doneAt      DateTime?
+
+  @@index([tenantId, status])
+}
